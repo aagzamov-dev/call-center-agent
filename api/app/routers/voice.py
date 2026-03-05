@@ -1,30 +1,20 @@
-"""POST /api/voice/transcribe — upload audio, get text back, optionally feed to agent."""
+"""POST /api/voice/transcribe — voice input via STT."""
 
 import uuid
-
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.engine import get_session
-from app.services import incident_service as svc
 from app.services.audio_service import transcribe_audio
 
 router = APIRouter(prefix="/api", tags=["voice"])
 
 
-@router.post("/voice/transcribe", status_code=201)
+@router.post("/voice/transcribe")
 async def voice_transcribe(
     audio: UploadFile = File(...),
-    incident_id: str | None = Query(None, description="If set, transcript is added as human_reply to this incident"),
-    sender: str = Query("caller", description="Who is speaking"),
-    language: str | None = Query(None, description="ISO language code (e.g. en, ru, uz)"),
     db: AsyncSession = Depends(get_session),
 ):
-    """
-    Upload a voice recording → transcribed to text via whisper-1.
-    If incident_id is provided, the transcript is automatically injected
-    as a human_reply event so the agent can read it.
-    """
     audio_bytes = await audio.read()
     if not audio_bytes:
         raise HTTPException(400, "Empty audio file")
@@ -32,32 +22,32 @@ async def voice_transcribe(
     ext = audio.filename.rsplit(".", 1)[-1] if audio.filename and "." in audio.filename else "webm"
     filename = f"voice_{uuid.uuid4().hex[:8]}.{ext}"
 
-    result = await transcribe_audio(audio_bytes, filename=filename, language=language)
-    transcript_text = result["text"]
+    result = await transcribe_audio(audio_bytes, filename=filename)
+    transcript = result["text"]
 
-    event = None
-    if incident_id:
-        inc = await svc.get_incident(db, incident_id)
-        if not inc:
-            raise HTTPException(404, "Incident not found")
+    # Now run it through the chat agent
+    from app.agent.graph import run_support_agent
+    from app.services import ticket_service as svc
 
-        event = await svc.add_event(
+    agent_result = await run_support_agent(transcript, channel="voice")
+    reply = agent_result["reply"]
+    ticket_action = agent_result["ticket_action"]
+    ticket = None
+
+    if ticket_action.get("action") == "create":
+        ticket = await svc.create_ticket(
             db,
-            incident_id=incident_id,
-            kind="human_reply",
-            actor="human",
-            summary=f"Voice message from {sender}: {transcript_text[:100]}",
-            data={
-                "sender": sender,
-                "body": transcript_text,
-                "channel": "voice",
-                "audio_url": result["audio_url"],
-            },
+            title=ticket_action.get("title", transcript[:80]),
+            team=ticket_action.get("team", "help_desk"),
+            priority=ticket_action.get("priority", "P3"),
+            summary=ticket_action.get("summary", ""),
         )
+        await svc.add_message(db, ticket_id=ticket["id"], role="user", content=transcript, channel="voice",
+                              metadata={"audio_url": result["audio_url"]})
+        await svc.add_message(db, ticket_id=ticket["id"], role="agent", content=reply, channel="voice")
+        for step in agent_result.get("agent_steps", []):
+            await svc.add_agent_step(db, ticket_id=ticket["id"], step_type=step.get("step_type", ""),
+                                     tool_name=step.get("tool_name", ""), input_data=step.get("input"),
+                                     output_data=step.get("output"))
 
-    return {
-        "transcript": transcript_text,
-        "audio_url": result["audio_url"],
-        "model": result["model"],
-        "event": event,
-    }
+    return {"transcript": transcript, "reply": reply, "ticket": ticket, "audio_url": result["audio_url"]}

@@ -1,51 +1,54 @@
-"""SQLAlchemy ORM models — only 2 tables: incidents + events."""
+"""Database models — Ticket, Message, AgentStep."""
 
-from datetime import datetime, timezone
-
-from sqlalchemy import Column, DateTime, Index, String, Text
-from sqlalchemy.orm import DeclarativeBase
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from sqlalchemy import Column, String, Text, DateTime, Integer, ForeignKey
+from sqlalchemy.orm import DeclarativeBase, relationship
 
 
 class Base(DeclarativeBase):
     pass
 
 
-class Incident(Base):
-    __tablename__ = "incidents"
+class Ticket(Base):
+    __tablename__ = "tickets"
 
     id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
-    severity = Column(String, nullable=False, default="medium")
-    status = Column(String, nullable=False, default="new")
-    host = Column(String, nullable=True)
-    service = Column(String, nullable=True)
+    team = Column(String, nullable=False, default="help_desk")  # help_desk, devops, sales, network, security
+    priority = Column(String, nullable=False, default="P3")     # P1, P2, P3, P4
+    status = Column(String, nullable=False, default="open")     # open, in_progress, resolved, closed
+    created_by = Column(String, default="user")
+    assigned_to = Column(String, default="")
     summary = Column(Text, default="")
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)
 
-    __table_args__ = (
-        Index("idx_incidents_status", "status"),
-        Index("idx_incidents_severity", "severity"),
-        Index("idx_incidents_host", "host"),
-    )
+    messages = relationship("Message", back_populates="ticket", order_by="Message.created_at")
+    agent_steps = relationship("AgentStep", back_populates="ticket", order_by="AgentStep.created_at")
 
 
-class Event(Base):
-    __tablename__ = "events"
+class Message(Base):
+    __tablename__ = "messages"
 
     id = Column(String, primary_key=True)
-    incident_id = Column(String, nullable=False, index=False)
-    kind = Column(String, nullable=False)
-    actor = Column(String, nullable=False, default="system")
-    summary = Column(String, nullable=False)
-    data = Column(Text, nullable=False, default="{}")
-    ts = Column(DateTime, default=utcnow)
+    ticket_id = Column(String, ForeignKey("tickets.id"), nullable=False)
+    role = Column(String, nullable=False)     # user, agent, system
+    content = Column(Text, nullable=False)
+    channel = Column(String, default="chat")  # chat, voice, email
+    metadata_json = Column(Text, default="{}")
+    created_at = Column(DateTime)
 
-    __table_args__ = (
-        Index("idx_events_incident_ts", "incident_id", "ts"),
-        Index("idx_events_incident_kind", "incident_id", "kind"),
-    )
+    ticket = relationship("Ticket", back_populates="messages")
+
+
+class AgentStep(Base):
+    __tablename__ = "agent_steps"
+
+    id = Column(String, primary_key=True)
+    ticket_id = Column(String, ForeignKey("tickets.id"), nullable=False)
+    step_type = Column(String, nullable=False)  # kb_search, tool_call, reasoning, decision, ticket_action
+    tool_name = Column(String, default="")
+    input_data = Column(Text, default="{}")
+    output_data = Column(Text, default="{}")
+    created_at = Column(DateTime)
+
+    ticket = relationship("Ticket", back_populates="agent_steps")

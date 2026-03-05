@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4o"
     LLM_TEMPERATURE: float = 0.2
     STT_MODEL: str = "whisper-1"
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

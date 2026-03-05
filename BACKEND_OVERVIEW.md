@@ -1,69 +1,101 @@
-# Backend & Agent Architecture Overview
+# Backend Overview
 
-This project is a high-performance **Incident AI Agent** system. It uses **FastAPI** for the web layer, **LangGraph** for multi-step agent reasoning, and **SQLite** for lightweight persistence.
+## Architecture
 
----
+```
+User (chat/voice)
+  → FastAPI Router (/api/chat or /api/voice/transcribe)
+    → LangGraph Agent (2 nodes)
+      → Node 1: understand — search KB via RAG
+      → Node 2: respond — LLM generates reply + ticket decision
+    → Ticket Service — saves ticket, messages, agent steps to SQLite
+  → JSON response {reply, ticket}
+```
 
-## 🏗️ Core Architecture
+## File Structure
 
-- **Web Layer**: FastAPI + Pydantic + WebSockets.
-- **Agent Layer**: LangGraph `StateGraph`. Unlike a simple "prompt + LLM", this is a stateful workflow that can loop, call tools, and verify findings.
-- **Tool Layer**: 10 deterministic tools (some real, some stubbed) providing logs, metrics, topology, etc.
-- **Persistence**: SQLite (2-table design: `incidents` for state, `events` for the timeline).
+```
+api/
+├── app/
+│   ├── main.py                  # FastAPI app, 4 routers, lifespan
+│   ├── core/
+│   │   ├── config.py            # Pydantic Settings (env vars)
+│   │   └── event_bus.py         # In-memory pub/sub (for WS)
+│   ├── db/
+│   │   ├── engine.py            # SQLAlchemy async engine + session
+│   │   └── models.py            # Ticket, Message, AgentStep
+│   ├── services/
+│   │   ├── ticket_service.py    # CRUD: tickets, messages, agent steps
+│   │   ├── rag_service.py       # ChromaDB + OpenAI embeddings + chunking
+│   │   └── audio_service.py     # Whisper STT transcription
+│   ├── agent/
+│   │   ├── state.py             # AgentState TypedDict
+│   │   ├── prompts.py           # System prompt (teams, priorities, KB)
+│   │   ├── nodes.py             # understand + respond nodes
+│   │   └── graph.py             # LangGraph: understand → respond → END
+│   ├── routers/
+│   │   ├── chat.py              # POST /api/chat
+│   │   ├── voice.py             # POST /api/voice/transcribe
+│   │   ├── tickets.py           # GET/PATCH /api/tickets
+│   │   └── kb.py                # KB search + CRUD
+│   └── tools/                   # Investigation tools (used by agent)
+│       ├── base.py, alerts.py, metrics.py, logs.py, command.py,
+│       ├── topology.py, contacts.py, wiki.py, network.py,
+│       ├── config_analysis.py, video.py, registry.py
+├── storage/
+│   ├── agent.db                 # SQLite database
+│   ├── audio/                   # Uploaded voice recordings
+│   └── kb/
+│       ├── seed_data.json       # 7 runbook articles
+│       └── chroma/              # ChromaDB vector index
+└── .env                         # OPENAI_API_KEY, models config
+```
 
----
+## Agent Flow
 
-## 📂 File-by-File Breakdown
+### Node 1: `understand`
+- Takes user message
+- Searches KB via ChromaDB (semantic vector search)
+- Records search step for admin visibility
 
-### `api/app/core/`
-- **`config.py`**: Loads environment variables (`.env`).
-- **`event_bus.py`**: In-memory Pub/Sub. When a new event is saved to the DB, it's broadcasted to active WebSockets.
+### Node 2: `respond`
+- Receives KB results + user message
+- LLM (GPT-4o) with structured output generates:
+  - `reply` — friendly text answer
+  - `should_create_ticket` — bool
+  - `team` — help_desk / devops / sales / network / security
+  - `priority` — P1 / P2 / P3 / P4
+  - `title` — ticket title
+  - `summary` — internal summary
+- Records decision step for admin visibility
 
-### `api/app/db/`
-- **`engine.py`**: Async SQLAlchemy setup.
-- **`models.py`**: Database schema. `Event` table is the "Source of Truth" for the timeline history.
+## RAG System
 
-### `api/app/services/`
-- **`incident_service.py`**: Handles all CRUD. Every action (alert, message, ticket) is saved as an `Event`.
-- **`audio_service.py`**: Uses `whisper-1` (STT) to transcribe voice recordings into text. Cheap at $0.006/min.
+- **Storage**: `seed_data.json` — 7 articles covering all 5 teams
+- **Chunking**: Section-level. Each section = 1 chunk. Document title prepended for context.
+- **Embedding**: OpenAI `text-embedding-3-small` ($0.00002/1K tokens)
+- **Vector store**: ChromaDB with cosine similarity, persisted to `storage/kb/chroma/`
+- **Auto-index**: First search triggers indexing. CRUD mutations rebuild index.
+- **Admin CRUD**: Full REST API at `/api/kb/documents`
 
-### `api/app/tools/`
-- **`registry.py`**: The "Brain" of tools. Maps tool names to implementations and wraps them for LangChain.
-- **`alerts.py`, `metrics.py`, `logs.py`, etc.**: Specific tools providing the agent with data.
+## Database Models
 
-### `api/app/agent/`
-- **`state.py`**: Defines what the agent "remembers" during its run (conversation history, evidence).
-- **`prompts.py`**: The "NOC Operator" personality and context builder.
-- **`nodes.py`**: Individual steps in the agent's brain (Gather → Investigate → Plan).
-- **`graph.py`**: The workflow map. Connects nodes with logical edges.
+### Ticket
+`id, title, team, priority, status, created_by, assigned_to, summary, created_at, updated_at`
 
----
+### Message
+`id, ticket_id, role (user/agent/system), content, channel (chat/voice/email), metadata_json, created_at`
 
-## 🤖 How the Agent Works
+### AgentStep
+`id, ticket_id, step_type (kb_search/decision/tool_call), tool_name, input_data, output_data, created_at`
 
-When you call `POST /api/incidents/{id}/agent/step`, the **LangGraph** starts:
+## Environment Variables
 
-1.  **START** → `gather_context`: Automatically pulls incident data, recent timeline, service topology, and relevant runbooks. No AI cost yet.
-2.  **`investigate` (LLM)**: The LLM looks at the context and decides which tools to call (e.g., "I see a disk alert, let me run `df -h`").
-3.  **`execute_tools`**: The system runs the requested tools and feeds the technical output back to the LLM.
-4.  **Loop**: Steps 2 & 3 repeat until the LLM has enough evidence.
-5.  **`produce_plan`**: The LLM generates a **Structured JSON Plan** (hypotheses, evidence summary, and specific actions).
-6.  **`execute_actions`**: The system validates the plan against `policy.py`.
-    - **Safe** (e.g., Create Ticket, Send Chat): Executed automatically.
-    - **Risky** (e.g., Make Voice Call, Resolve): Marked as "Needs Approval".
-7.  **END**: High-fidelity events are created on the timeline for you to see.
-
----
-
-## 💬 How to Interact
-
-### What can the Agent do?
-- **Analyze**: Metrics, logs, connection errors, and firewall rules.
-- **Communicate**: Email, Chat (Slack-like), and Voice (upload audio → auto-transcribed → fed to agent).
-- **Manage**: Create/Update tickets, change severity, resolve incidents.
-
-### Questions/Hints to give the Agent:
-- *"Check the database connections specifically; we had a similar issue last week."*
-- *"Does the firewall have any recent deny rules for this host?"*
-- *"Don't create a ticket yet, just gather evidence."*
-- *"This is a production emergency, escalate and notify on-call immediately."*
+| Variable | Default | Description |
+|----------|---------|-------------|
+| OPENAI_API_KEY | — | Required |
+| DATABASE_URL | sqlite+aiosqlite:///./storage/agent.db | SQLite path |
+| LLM_MODEL | gpt-4o | Main reasoning model |
+| STT_MODEL | whisper-1 | Speech-to-text |
+| EMBEDDING_MODEL | text-embedding-3-small | RAG embeddings |
+| LLM_TEMPERATURE | 0.2 | Creativity level |

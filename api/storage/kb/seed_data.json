@@ -1,0 +1,177 @@
+[
+    {
+        "id": "kb-001",
+        "title": "Laptop Troubleshooting Guide",
+        "category": "help_desk",
+        "tags": [
+            "laptop",
+            "screen",
+            "power",
+            "performance",
+            "hardware"
+        ],
+        "sections": [
+            {
+                "heading": "Screen Issues",
+                "content": "If the laptop screen flickers: 1) Update display drivers via Settings > Update. 2) Check display cable by connecting an external monitor. 3) Adjust refresh rate: Settings > Display > Advanced > 60Hz. 4) If external monitor works fine, the laptop panel may need replacement — create a ticket for Help Desk."
+            },
+            {
+                "heading": "Laptop Won't Turn On",
+                "content": "1) Hold power button for 15 seconds to force reset. 2) Disconnect charger, remove battery if possible, hold power for 30s, reconnect. 3) Try a different charger. 4) If no signs of life, the motherboard may be faulty — create P2 ticket for Help Desk."
+            },
+            {
+                "heading": "Slow Performance",
+                "content": "1) Close unnecessary browser tabs and apps. 2) Check Task Manager (Ctrl+Shift+Esc) for high CPU/memory usage. 3) Restart the laptop. 4) Run disk cleanup: Settings > Storage > Temporary files. 5) If persistent, may need RAM upgrade or SSD — create ticket for Help Desk."
+            }
+        ]
+    },
+    {
+        "id": "kb-002",
+        "title": "Password and Account Issues",
+        "category": "help_desk",
+        "tags": [
+            "password",
+            "reset",
+            "login",
+            "account",
+            "locked",
+            "mfa"
+        ],
+        "sections": [
+            {
+                "heading": "Password Reset",
+                "content": "To reset your password: 1) Go to https://portal.company.com/reset. 2) Enter your email address. 3) Check your inbox for the reset link. 4) Create a new password (min 12 chars, mix of letters/numbers/symbols). If you don't receive the email within 5 minutes, check spam or contact Help Desk."
+            },
+            {
+                "heading": "Account Locked",
+                "content": "Accounts lock after 5 failed login attempts. Wait 30 minutes for auto-unlock, or contact Help Desk for immediate unlock. If you suspect unauthorized access, report to Security team immediately."
+            }
+        ]
+    },
+    {
+        "id": "kb-003",
+        "title": "VPN and Network Connectivity",
+        "category": "network",
+        "tags": [
+            "vpn",
+            "wifi",
+            "network",
+            "connectivity",
+            "internet",
+            "printer"
+        ],
+        "sections": [
+            {
+                "heading": "VPN Connection Issues",
+                "content": "1) Ensure you're connected to the internet first. 2) Close and reopen the VPN client. 3) Try a different VPN server region. 4) Disable any personal firewalls temporarily. 5) If using split tunneling, check that the target resource isn't excluded. 6) If still failing, restart your computer and try again."
+            },
+            {
+                "heading": "WiFi Not Connecting",
+                "content": "1) Toggle WiFi off and on. 2) Forget the network and reconnect. 3) Check if others in the office have the same issue (may be AP problem). 4) Try connecting to your phone hotspot to rule out laptop hardware. 5) If office-wide, contact Network team."
+            },
+            {
+                "heading": "Printer Not Working",
+                "content": "1) Ensure printer is powered on and connected to network. 2) Try printing a test page from the printer itself. 3) Remove and re-add the printer: Settings > Printers. 4) Check if printer queue is stuck: cancel all pending jobs. 5) If network printer, verify you're on the same subnet."
+            }
+        ]
+    },
+    {
+        "id": "kb-004",
+        "title": "Server and Infrastructure Issues",
+        "category": "devops",
+        "tags": [
+            "server",
+            "disk",
+            "cpu",
+            "database",
+            "deployment",
+            "postgresql"
+        ],
+        "sections": [
+            {
+                "heading": "Disk Full on Server",
+                "content": "1) Check disk usage: df -h. 2) Find large files: du -sh /var/* | sort -rh | head. 3) Clean old logs: find /var/log -name '*.gz' -mtime +30 -delete. 4) Check PostgreSQL WAL: du -sh pg_wal/. 5) Run pg_archivecleanup if WAL is excessive. 6) Contact DevOps if immediate capacity needed."
+            },
+            {
+                "heading": "High CPU on Server",
+                "content": "1) Check top processes: top -bn1 | head -20. 2) Look for runaway queries: SELECT pid, query, age(clock_timestamp(), query_start) FROM pg_stat_activity WHERE state != 'idle' ORDER BY query_start. 3) Consider killing long queries. 4) Check if a cron job or deployment is running."
+            },
+            {
+                "heading": "Deployment Failed",
+                "content": "1) Check CI/CD pipeline logs. 2) Verify the artifact was built successfully. 3) Check if the target environment has sufficient resources. 4) Look for configuration differences between staging and production. 5) Rollback if needed: deploy the previous version tag."
+            }
+        ]
+    },
+    {
+        "id": "kb-005",
+        "title": "Sales and Licensing FAQ",
+        "category": "sales",
+        "tags": [
+            "pricing",
+            "license",
+            "contract",
+            "quote",
+            "renewal",
+            "billing"
+        ],
+        "sections": [
+            {
+                "heading": "Pricing and Quotes",
+                "content": "For pricing inquiries: 1) Individual licenses start at $49/month/user. 2) Team plans (5-50 users) get 20% discount. 3) Enterprise (50+ users) — custom pricing, contact sales@company.com. 4) Free trial available for 14 days, no credit card needed. For a formal quote, provide: company name, number of users, billing period (monthly/annual)."
+            },
+            {
+                "heading": "Contract Renewal",
+                "content": "Contracts auto-renew 30 days before expiry. To modify: 1) Log into the billing portal. 2) Go to Subscriptions > Manage. 3) Update user count or plan tier. 4) For cancellation, submit 30 days before renewal date. 5) For enterprise agreements, contact your account manager directly."
+            }
+        ]
+    },
+    {
+        "id": "kb-006",
+        "title": "Security Incident Reporting",
+        "category": "security",
+        "tags": [
+            "security",
+            "phishing",
+            "breach",
+            "access",
+            "suspicious",
+            "certificate"
+        ],
+        "sections": [
+            {
+                "heading": "Suspicious Email (Phishing)",
+                "content": "If you receive a suspicious email: 1) Do NOT click any links or download attachments. 2) Forward the email to security@company.com. 3) Report it in the phishing button (Outlook toolbar). 4) If you already clicked a link, immediately change your password and notify Security team. This is a P2 priority — Security team will investigate within 1 hour."
+            },
+            {
+                "heading": "Access Request",
+                "content": "To request access to a system: 1) Submit a request at https://portal.company.com/access. 2) Specify the system, required role, and business justification. 3) Manager approval required. 4) Security team reviews within 24 hours. 5) For production environment access, additional approval from VP required."
+            },
+            {
+                "heading": "TLS Certificate Issues",
+                "content": "If you see certificate warnings: 1) Check certificate expiry: openssl s_client -connect host:443. 2) For Let's Encrypt: certbot renew --force-renewal. 3) For internal CA: submit CSR to security-team. 4) Reload web server after replacement: nginx -s reload."
+            }
+        ]
+    },
+    {
+        "id": "kb-007",
+        "title": "Software Installation Requests",
+        "category": "help_desk",
+        "tags": [
+            "software",
+            "install",
+            "application",
+            "license",
+            "tools"
+        ],
+        "sections": [
+            {
+                "heading": "Approved Software",
+                "content": "The following software can be self-installed from the Company App Store: VS Code, Slack, Zoom, Chrome, Firefox, 7-Zip, Notepad++. For software not in the App Store, submit a request to Help Desk with: software name, version, business justification, and manager approval."
+            },
+            {
+                "heading": "Developer Tools",
+                "content": "For developer tools (Docker, Node.js, Python, JetBrains IDEs): 1) Submit request at dev-tools-portal. 2) Requires team lead approval. 3) Installed within 24 hours. 4) JetBrains IDEs require a license allocation — check with your team lead."
+            }
+        ]
+    }
+]

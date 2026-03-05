@@ -1,107 +1,46 @@
-"""System prompt template for the incident investigation agent."""
+"""System prompt for the support desk agent."""
 
-SYSTEM_PROMPT = """You are an expert Incident Response AI Agent for a NOC (Network Operations Center).
+SYSTEM_PROMPT = """You are a friendly, professional IT & Business Support Agent.
+You help employees and customers with their problems by:
+1. Understanding their issue
+2. Searching the knowledge base for solutions
+3. Providing clear, step-by-step answers
+4. Creating support tickets when needed
 
-## Your Role
-You investigate infrastructure incidents by gathering evidence using diagnostic tools, then produce a structured action plan.
+TEAMS you can route tickets to:
+- help_desk: Laptop issues, password resets, software installation, general IT
+- devops: Server problems, deployments, infrastructure, databases, disk/CPU issues
+- sales: Pricing questions, license requests, contract renewals, product inquiries
+- network: VPN, WiFi, firewall, connectivity, printer issues
+- security: Suspicious emails, access requests, certificate issues, data breach
 
-## Current Incident
-Title: {incident_title}
-Severity: {incident_severity}
-Status: {incident_status}
-Host: {incident_host}
-Service: {incident_service}
+PRIORITY levels:
+- P1: Critical — system down, data loss, security breach
+- P2: High — major feature broken, many users affected
+- P3: Medium — single user issue, workaround exists
+- P4: Low — cosmetic, nice-to-have, general question
 
-## Recent Timeline
-{timeline_summary}
+RULES:
+- Always be helpful and empathetic
+- If you can solve the issue from KB, answer directly and still create a ticket as record
+- If you cannot solve it, create a ticket and reassure the user
+- Always create a ticket for tracking purposes
+- Use simple, non-technical language unless the user is technical
+- Ask clarifying questions if the issue is vague
 
-## Service Topology
-{topology_summary}
+KNOWLEDGE BASE RESULTS:
+{kb_results}
 
-## Relevant Knowledge Base
-{kb_summary}
-
-## On-Call Contacts
-{contacts_summary}
-
-## Instructions
-1. INVESTIGATE: Use the available tools to gather evidence about the root cause.
-   - Check metrics for trends (CPU, RAM, disk, latency)
-   - Search logs for errors and warnings
-   - Run diagnostic commands (df, top, pg_stat_activity, etc.)
-   - Check related alerts for the host
-   - Check network/firewall status if relevant
-   - Review config changes if relevant
-
-2. When you have enough evidence, STOP calling tools. The system will then ask you for your final plan.
-
-3. Be thorough but efficient — typically 2-4 tool calls are sufficient.
-
-4. Focus on the MOST LIKELY root cause based on the alert and evidence.
-
-{hint_section}"""
+CONVERSATION HISTORY:
+{history}
+"""
 
 
-def build_system_prompt(
-    incident: dict,
-    timeline: list[dict],
-    topology: dict,
-    kb_snippets: list[dict],
-    contacts: dict,
-    hint: str = "",
-) -> str:
-    timeline_summary = "\n".join(
-        f"- [{e.get('ts', '')}] {e.get('kind', '')}: {e.get('summary', '')}"
-        for e in (timeline or [])[-10:]
-    ) or "No events yet."
-
-    topo_items = []
-    if topology:
-        topo_items.append(f"Service: {topology.get('service', 'unknown')}")
-        topo_items.append(f"Hosts: {', '.join(topology.get('hosts', []))}")
-        topo_items.append(f"Depends on: {', '.join(topology.get('depends_on', []))}")
-        topo_items.append(f"Depended by: {', '.join(topology.get('depended_by', []))}")
-        topo_items.append(f"Owner: {topology.get('owner', 'unknown')}")
-    topology_summary = "\n".join(topo_items) or "No topology data."
-
-    kb_items = []
-    for kb in (kb_snippets or [])[:3]:
-        kb_items.append(f"### {kb.get('title', '')}\n{kb.get('snippet', '')}")
-    kb_summary = "\n\n".join(kb_items) or "No relevant runbooks found."
-
-    contacts_info = []
-    if contacts:
-        oncall = contacts.get("oncall", {})
-        if oncall:
-            contacts_info.append(f"On-call: {oncall.get('name', '')} ({oncall.get('email', '')}, {oncall.get('phone', '')})")
-        for m in contacts.get("members", [])[:3]:
-            contacts_info.append(f"- {m.get('name', '')} ({m.get('role', '')}): {m.get('email', '')}")
-    contacts_summary = "\n".join(contacts_info) or "No contact info available."
-
-    hint_section = f"## Additional Context from Human\n{hint}" if hint else ""
-
-    return SYSTEM_PROMPT.format(
-        incident_title=incident.get("title", ""),
-        incident_severity=incident.get("severity", ""),
-        incident_status=incident.get("status", ""),
-        incident_host=incident.get("host", ""),
-        incident_service=incident.get("service", ""),
-        timeline_summary=timeline_summary,
-        topology_summary=topology_summary,
-        kb_summary=kb_summary,
-        contacts_summary=contacts_summary,
-        hint_section=hint_section,
-    )
-
-
-PLAN_PROMPT = """Based on your investigation, produce your final structured action plan.
-
-Include:
-- A 1-3 sentence summary of the situation
-- Severity assessment
-- Ranked hypotheses for root cause
-- Evidence you gathered (tool + finding)
-- Questions for the human operator
-- Actions to take (create tickets, send notifications, run commands, etc.)
-
-Be specific and actionable."""
+def build_system_prompt(kb_results: list, history: str = "") -> str:
+    kb_text = "No relevant articles found."
+    if kb_results:
+        kb_text = "\n\n".join(
+            f"📄 {r.get('doc_title', '')} — {r.get('section', '')}\n{r.get('content', '')}"
+            for r in kb_results[:5]
+        )
+    return SYSTEM_PROMPT.format(kb_results=kb_text, history=history or "New conversation")

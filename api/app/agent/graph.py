@@ -1,59 +1,37 @@
-"""LangGraph StateGraph definition — the compiled agent graph."""
-
-from __future__ import annotations
+"""LangGraph StateGraph — support agent flow."""
 
 from langgraph.graph import END, StateGraph
 
-from app.agent.nodes import (
-    execute_actions,
-    execute_tools,
-    gather_context,
-    investigate,
-    produce_plan,
-    should_continue_investigating,
-)
+from app.agent.nodes import understand, respond
 from app.agent.state import AgentState
 
-# ── Build graph ────────────────────────────────────────────────────────
-
 _graph = StateGraph(AgentState)
+_graph.add_node("understand", understand)
+_graph.add_node("respond", respond)
 
-_graph.add_node("gather", gather_context)
-_graph.add_node("investigate", investigate)
-_graph.add_node("tools", execute_tools)
-_graph.add_node("plan", produce_plan)
-_graph.add_node("execute", execute_actions)
-
-_graph.set_entry_point("gather")
-_graph.add_edge("gather", "investigate")
-_graph.add_conditional_edges(
-    "investigate",
-    should_continue_investigating,
-    {"tools": "tools", "plan": "plan"},
-)
-_graph.add_edge("tools", "investigate")
-_graph.add_edge("plan", "execute")
-_graph.add_edge("execute", END)
+_graph.set_entry_point("understand")
+_graph.add_edge("understand", "respond")
+_graph.add_edge("respond", END)
 
 agent_graph = _graph.compile()
 
 
-# ── Public API ─────────────────────────────────────────────────────────
-
-async def run_agent_step(incident: dict, step_number: int, hint: str = "") -> dict:
-    """Run one full agent step. Returns the final state."""
-    initial_state: AgentState = {
-        "incident": incident,
-        "timeline": [],
-        "topology": {},
-        "kb_snippets": [],
-        "contacts": {},
+async def run_support_agent(user_message: str, ticket_id: str = "", channel: str = "chat") -> dict:
+    """Run the support agent. Returns {reply, ticket_action, agent_steps, kb_results}."""
+    initial: AgentState = {
+        "ticket_id": ticket_id,
+        "user_message": user_message,
+        "channel": channel,
         "messages": [],
-        "evidence": [],
-        "plan": None,
-        "events_created": [],
-        "step_number": step_number,
-        "hint": hint,
+        "kb_results": [],
+        "agent_steps": [],
+        "reply": "",
+        "ticket_action": {"action": "none"},
     }
-    final_state = await agent_graph.ainvoke(initial_state)
-    return final_state
+    final = await agent_graph.ainvoke(initial)
+    return {
+        "reply": final.get("reply", ""),
+        "ticket_action": final.get("ticket_action", {}),
+        "agent_steps": final.get("agent_steps", []),
+        "kb_results": final.get("kb_results", []),
+    }
