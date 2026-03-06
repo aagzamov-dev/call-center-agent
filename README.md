@@ -9,7 +9,7 @@ AI-powered support agent that handles IT, DevOps, Sales, Network, and Security r
 ```bash
 cd api
 python -m venv .venv
-.venv\Scripts\activate        # Windows
+.venv\Scripts\activate        # Windows or . .venv/Scripts/activate
 pip install -r requirements.txt
 pip install chromadb
 
