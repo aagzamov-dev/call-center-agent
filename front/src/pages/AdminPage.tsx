@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listTickets, getTicket, updateTicket } from '../api/tickets';
 import { sendReply, sendAdminVoiceReply } from '../api/chat';
 import { formatDate } from '../lib/utils';
 import AudioRecorder from '../components/AudioRecorder';
+import VoiceMessage from '../components/VoiceMessage';
+import ReactMarkdown from 'react-markdown';
 
 const TEAMS = ['all', 'help_desk', 'devops', 'sales', 'network', 'security'];
 const STATUSES = ['all', 'open', 'in_progress', 'resolved', 'closed'];
@@ -16,10 +18,13 @@ export default function AdminPage() {
     const [statusFilter, setStatusFilter] = useState('all');
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
+    // Local messages state — synced from detail query + WS
+    const [localMessages, setLocalMessages] = useState<any[]>([]);
+
     const { data: ticketsData } = useQuery({
         queryKey: ['tickets', teamFilter, statusFilter],
         queryFn: () => listTickets(teamFilter === 'all' ? undefined : teamFilter, statusFilter === 'all' ? undefined : statusFilter),
-        refetchInterval: 5000,
+        refetchInterval: 15000, // reduced from 5s since WS handles real-time
     });
 
     const { data: detail } = useQuery({
@@ -27,6 +32,40 @@ export default function AdminPage() {
         queryFn: () => getTicket(selectedId!),
         enabled: !!selectedId,
     });
+
+    // Sync detail.messages into local state when detail changes
+    useEffect(() => {
+        if (detail?.messages) {
+            setLocalMessages(detail.messages);
+        }
+    }, [detail]);
+
+    // WebSocket connection for real-time chat updates on selected ticket
+    useEffect(() => {
+        if (!selectedId) return;
+        const ws = new WebSocket(`ws://localhost:8000/api/ws/chat/${selectedId}`);
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'new_message') {
+                    const m = data.message;
+                    setLocalMessages(prev => {
+                        if (prev.some((x: any) => x.id === m.id)) return prev;
+                        return [...prev, m];
+                    });
+                } else if (data.type === 'ticket_update') {
+                    // Refresh ticket list and detail
+                    qc.invalidateQueries({ queryKey: ['tickets'] });
+                    qc.invalidateQueries({ queryKey: ['ticket-detail', selectedId] });
+                }
+            } catch (e) {
+                console.error('Admin WS parse error', e);
+            }
+        };
+
+        return () => ws.close();
+    }, [selectedId, qc]);
 
     const patchMut = useMutation({
         mutationFn: (updates: Record<string, string>) => updateTicket(selectedId!, updates),
@@ -36,19 +75,31 @@ export default function AdminPage() {
     const [replyText, setReplyText] = useState('');
     const replyMut = useMutation({
         mutationFn: () => sendReply(selectedId!, replyText),
-        onSuccess: () => { qc.invalidateQueries({ queryKey: ['ticket-detail', selectedId] }); setReplyText(''); },
+        onSuccess: () => {
+            // WS will add the message — just clear input. Fallback invalidation.
+            setReplyText('');
+            setTimeout(() => qc.invalidateQueries({ queryKey: ['ticket-detail', selectedId] }), 500);
+        },
     });
 
     const voiceReplyMut = useMutation({
         mutationFn: (audio: Blob) => sendAdminVoiceReply(selectedId!, audio),
-        onSuccess: () => { qc.invalidateQueries({ queryKey: ['ticket-detail', selectedId] }); },
+        onSuccess: () => {
+            // WS will add the message. Fallback invalidation.
+            setTimeout(() => qc.invalidateQueries({ queryKey: ['ticket-detail', selectedId] }), 500);
+        },
     });
 
     const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({});
-
     const toggleStep = (idx: number) => {
         setExpandedSteps(prev => ({ ...prev, [idx]: !prev[idx] }));
     };
+
+    // Auto-scroll to bottom of conversation
+    const conversationEndRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [localMessages]);
 
     const tickets = ticketsData?.tickets || [];
 
@@ -95,7 +146,10 @@ export default function AdminPage() {
                                     onClick={() => setSelectedId(t.id as string)}>
                                     <div className="flex items-center justify-between mb-2">
                                         <span style={{ fontWeight: 800, fontSize: '0.7rem', color: PRIORITY_COLORS[t.priority as string], border: `1px solid ${PRIORITY_COLORS[t.priority as string]}`, padding: '1px 6px', borderRadius: 4 }}>{t.priority as string}</span>
-                                        <span className="font-mono text-xs text-muted">{(t.id as string).substring(0, 10)}</span>
+                                        <div className="flex items-center gap-2">
+                                            {t.channel === 'voice' && <span title="Voice" style={{ fontSize: '0.7rem' }}>🎤</span>}
+                                            <span className="font-mono text-xs text-muted">{(t.id as string).substring(0, 10)}</span>
+                                        </div>
                                     </div>
                                     <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 8 }} className="truncate">{t.title as string}</div>
                                     <div className="flex items-center gap-2 text-xs text-muted">
@@ -127,6 +181,7 @@ export default function AdminPage() {
                                     <div className="flex items-center gap-3 mb-1">
                                         <span className="font-mono text-muted text-sm">{detail.id}</span>
                                         <span className={`badge ${detail.status === 'resolved' ? 'badge-success' : 'badge-warning'}`}>{detail.status}</span>
+                                        {detail.channel === 'voice' && <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>🎤 Voice</span>}
                                     </div>
                                     <h1 style={{ marginBottom: 8 }}>{detail.title}</h1>
                                     <div className="flex items-center gap-4 text-sm text-muted">
@@ -151,10 +206,10 @@ export default function AdminPage() {
                             <div>
                                 <div className="flex items-center gap-2 mb-4">
                                     <h3>Conversation</h3>
-                                    <span className="badge badge-info">{detail.messages?.length || 0}</span>
+                                    <span className="badge badge-info">{localMessages.length}</span>
                                 </div>
                                 <div className="flex flex-col gap-6 mb-6">
-                                    {(detail.messages || []).map((m: any) => {
+                                    {localMessages.map((m: any) => {
                                         const isEmail = detail.channel === 'email';
 
                                         if (isEmail) {
@@ -192,11 +247,22 @@ export default function AdminPage() {
                                                             </span>
                                                             <span style={{ fontSize: '0.65rem', opacity: 0.6 }}>{formatDate(m.created_at as string)}</span>
                                                         </div>
-                                                        <div>{m.content as string}</div>
+                                                        
+                                                        {/* Text content */}
+                                                        {m.content && (
+                                                            <div className="markdown-content">
+                                                                {m.role === 'agent' ? (
+                                                                    <ReactMarkdown>{m.content as string}</ReactMarkdown>
+                                                                ) : (
+                                                                    <div>{m.content as string}</div>
+                                                                )}
+                                                            </div>
+                                                        )}
 
-                                                        {m.audio_url && typeof m.audio_url === 'string' && (
+                                                        {/* Audio player */}
+                                                        {m.metadata?.audio_url && typeof m.metadata.audio_url === 'string' && (
                                                             <div style={{ marginTop: 8 }}>
-                                                                <audio src={m.audio_url.startsWith('http') ? m.audio_url : `http://localhost:8000${m.audio_url.startsWith('/') ? '' : '/'}${m.audio_url}`} controls style={{ height: 36, width: '100%', maxWidth: 240, borderRadius: 18, filter: m.role !== 'admin' ? 'invert(1)' : 'none' }} />
+                                                                <VoiceMessage audioUrl={m.metadata.audio_url} isUser={m.role === 'user'} />
                                                             </div>
                                                         )}
                                                     </div>
@@ -204,6 +270,7 @@ export default function AdminPage() {
                                             </div>
                                         );
                                     })}
+                                    <div ref={conversationEndRef} />
                                 </div>
 
                                 <div className="card" style={{ padding: 12, background: 'var(--bg-input)', border: '1px solid var(--border)' }}>
@@ -211,7 +278,7 @@ export default function AdminPage() {
                                         {detail.channel === 'voice' ? (
                                             <div className="flex items-center gap-4 w-full">
                                                 <div style={{ flex: 1, padding: 10, color: '#888', fontStyle: 'italic' }}>
-                                                    Voice mode active. Record your audio response:
+                                                    🎤 Voice mode — Record your audio response:
                                                 </div>
                                                 <AudioRecorder onSend={(blob) => voiceReplyMut.mutate(blob)} disabled={voiceReplyMut.isPending} />
                                             </div>

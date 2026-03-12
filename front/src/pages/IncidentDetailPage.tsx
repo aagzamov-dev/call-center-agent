@@ -10,6 +10,7 @@ import { searchKB } from '../api/kb';
 import { useIncidentStream } from '../hooks/useIncidentStream';
 import { formatDate, severityClass } from '../lib/utils';
 import { KIND_ICONS } from '../lib/constants';
+import VoiceMessage from '../components/VoiceMessage';
 
 export default function IncidentDetailPage() {
     const { id } = useParams<{ id: string }>();
@@ -73,8 +74,14 @@ export default function IncidentDetailPage() {
             stream.getTracks().forEach((t) => t.stop());
             const blob = new Blob(chunks, { type: 'audio/webm' });
             try {
-                const res = await transcribeVoice(blob, id, 'operator');
-                setTranscript(res.transcript);
+                const fd = new FormData();
+                fd.append('audio', blob, 'recording.webm');
+                const response = await fetch(`/api/tickets/${id}/voice_reply`, {
+                    method: 'POST',
+                    body: fd
+                });
+                const res = await response.json();
+                setTranscript(res.content); // res.content is the transcript from voice_reply
                 qc.invalidateQueries({ queryKey: ['timeline', id] });
             } catch { setTranscript('Error transcribing audio'); }
         };
@@ -196,18 +203,26 @@ export default function IncidentDetailPage() {
                                 <div className="tabs">
                                     {(['email', 'chat', 'voice'] as const).map((t) => (
                                         <div key={t} className={`tab ${commsTab === t ? 'active' : ''}`} onClick={() => setCommsTab(t)}>
-                                            {t === 'email' ? '📧 Email' : t === 'chat' ? '💬 Chat' : '🎤 Voice'}
+                                            {t === 'email' ? '📧 Email' : t === 'chat' ? '💬 Chat' : '🎤 Voice for Admin'}
                                         </div>
                                     ))}
                                 </div>
 
                                 {/* Messages */}
                                 <div className="flex-col gap-2 mb-4" style={{ maxHeight: 150, overflowY: 'auto' }}>
-                                    {(messages?.items || []).filter((m: Record<string, unknown>) => (m.data as Record<string, string>)?.channel === commsTab).map((m: Record<string, unknown>) => (
-                                        <div key={m.id as string} className="text-sm" style={{ padding: 6, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
-                                            <span className="text-muted">{formatDate(m.ts as string)}</span> {m.summary as string}
-                                        </div>
-                                    ))}
+                                    {(messages?.items || []).filter((m: Record<string, unknown>) => (m.data as Record<string, string>)?.channel === commsTab).map((m: Record<string, unknown>) => {
+                                        const mData = m.data as Record<string, any>;
+                                        return (
+                                            <div key={m.id as string} className="text-sm" style={{ padding: 6, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
+                                                <span className="text-muted">{formatDate(m.ts as string)}</span>
+                                                {commsTab === 'voice' ? (
+                                                    mData.audio_url && <div style={{ marginTop: 4 }}><VoiceMessage audioUrl={mData.audio_url} isUser={mData.sender !== 'admin'} /></div>
+                                                ) : (
+                                                    <span> {m.summary as string}</span>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
 
                                 {commsTab === 'email' && (

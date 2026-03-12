@@ -9,6 +9,9 @@ from app.services.audio_service import transcribe_audio
 
 router = APIRouter(prefix="/api", tags=["voice"])
 
+# Words that indicate the user considers the issue resolved
+_RESOLVE_KEYWORDS = ["thank", "tanks", "thanks", "worked", "fixed", "done", "solved", "great", "perfect"]
+
 
 @router.post("/voice/transcribe")
 async def voice_transcribe(
@@ -57,6 +60,7 @@ async def voice_transcribe(
             priority=ticket_action.get("priority", "P3"),
             summary=ticket_action.get("summary", ""),
             created_by=session_id,
+            channel="voice",
         )
         ticket_id = ticket["id"]
         action_type = "create"
@@ -71,18 +75,44 @@ async def voice_transcribe(
             await svc.update_ticket(db, ticket_id, title=new_title)
             ticket["title"] = new_title
 
+    # Detect resolution intent from transcript
+    lower_transcript = transcript.lower()
+    is_thanks = any(k in lower_transcript for k in _RESOLVE_KEYWORDS)
+    if is_thanks and action_type not in ("resolve", "create"):
+        action_type = "resolve"
+
     if ticket_id:
         from app.core.websockets import manager
         
-        await svc.add_message(db, ticket_id=ticket_id, role="user", content=transcript, channel="voice",
-                              metadata={"audio_url": result["audio_url"]})
+        # Save & broadcast USER voice message
+        user_msg = await svc.add_message(
+            db, ticket_id=ticket_id, role="user", content=transcript, channel="voice",
+            metadata={"audio_url": result["audio_url"]}
+        )
+        await manager.broadcast_to_ticket(ticket_id, {
+            "type": "new_message",
+            "message": user_msg
+        })
         
         from app.services.audio_service import generate_audio
         if reply:
+            # Escalation check: if RAG confidence is low, keep full reply but add admin note
+            is_rag_low = False
+            for step in agent_result.get("agent_steps", []):
+                if step.get("step_type") == "evaluation" and step.get("output", {}).get("context_confidence", 1.0) < 0.4:
+                    is_rag_low = True
+                    break
+            
+            if is_rag_low and "admin will answer" not in reply.lower():
+                reply += "\n\nAn Admin will answer you as soon as possible."
+
+            # Generate TTS for the full reply (no truncation!)
             agent_audio_url = await generate_audio(reply)
             
-            agent_msg = await svc.add_message(db, ticket_id=ticket_id, role="agent", content=reply, channel="voice",
-                                              metadata={"audio_url": agent_audio_url})
+            agent_msg = await svc.add_message(
+                db, ticket_id=ticket_id, role="agent", content=reply, channel="voice",
+                metadata={"audio_url": agent_audio_url}
+            )
             
             await manager.broadcast_to_ticket(ticket_id, {
                 "type": "new_message",
@@ -104,6 +134,8 @@ async def voice_transcribe(
         "agent_audio_url": agent_audio, 
         "message_id": agent_msg["id"] if agent_msg else None
     }
+
+
 @router.post("/tickets/{ticket_id}/voice_reply")
 async def voice_reply(
     ticket_id: str,

@@ -27,11 +27,12 @@ def _now() -> datetime:
 async def create_ticket(
     db: AsyncSession, *, title: str, team: str = "help_desk",
     priority: str = "P3", created_by: str = "user", summary: str = "",
+    channel: str = "chat",
 ) -> dict:
     t = Ticket(
         id=_uid("TK-"), title=title, team=team, priority=priority,
         status="open", created_by=created_by, assigned_to="",
-        summary=summary, created_at=_now(), updated_at=_now(),
+        summary=summary, channel=channel, created_at=_now(), updated_at=_now(),
     )
     db.add(t)
     await db.commit()
@@ -164,7 +165,7 @@ def _ticket_to_dict(t: Ticket) -> dict:
         "status": t.status, "created_by": t.created_by, "assigned_to": t.assigned_to,
         "summary": t.summary or "",
         "category_id": getattr(t, "category_id", ""),
-        "channel": getattr(t, "summary", "").replace("Channel: ", "") if "Channel:" in getattr(t, "summary", "") else "chat",
+        "channel": getattr(t, "channel", "chat") or "chat",
         "sentiment_score": getattr(t, "sentiment_score", 0.0),
         "escalated_at": t.escalated_at.isoformat() if getattr(t, "escalated_at", None) else None,
         "duplicate_of": getattr(t, "duplicate_of", None),

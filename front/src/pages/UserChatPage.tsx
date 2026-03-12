@@ -35,7 +35,7 @@ export default function UserChatPage() {
 
     // New Ticket Modal State
     const [showNewModal, setShowNewModal] = useState(false);
-    const [newTicketChannel, setNewTicketChannel] = useState<'chat' | 'email' | 'voice'>('chat');
+    const [newTicketChannel, setNewTicketChannel] = useState<'chat' | 'voice'>('chat');
 
     // Auth Hack
     const [sessionId] = useState(() => {
@@ -63,10 +63,21 @@ export default function UserChatPage() {
                     setAgentStatus(null);
                     const m = data.message;
                     setMessages(prev => {
-                        // Prevent duplicates
+                        // Prevent duplicates — check by server message id
                         if (prev.some(x => x.id === m.id)) return prev;
-                        return [...prev, { id: m.id, role: m.role as any, content: m.content, audio_url: m.audio_url }];
+                        // If this is a user message from WS, replace the optimistic voice_ message
+                        if (m.role === 'user') {
+                            const optimisticIdx = prev.findIndex(x => String(x.id).startsWith('voice_') || String(x.id).startsWith('local_'));
+                            if (optimisticIdx >= 0) {
+                                const updated = [...prev];
+                                updated[optimisticIdx] = { id: m.id, role: m.role as any, content: m.content, audio_url: m.metadata?.audio_url };
+                                return updated;
+                            }
+                        }
+                        return [...prev, { id: m.id, role: m.role as any, content: m.content, audio_url: m.metadata?.audio_url }];
                     });
+                    // Auto-clear loading if agent replied
+                    if (m.role === 'agent') setLoading(false);
                 } else if (data.type === "ticket_update") {
                     if (data.ticket.status === 'resolved') setIsResolved(true);
                     refetchHistory();
@@ -95,12 +106,12 @@ export default function UserChatPage() {
             setFeedbackGiven(false);
             setShowResolvedPrompt(false);
 
-            let welcome = "Hello! 👋 I'm your support assistant. Let's get started on a new issue. What can I help you with?";
-            if (newTicketChannel === 'email') welcome = "Subject: Open Support Ticket\n\nPlease reply with the details of your request in an email format.";
-            if (newTicketChannel === 'voice') welcome = "Voice mode active. Please click the microphone to send your request.";
-
-            setMessages([{ id: Date.now(), role: 'agent', content: welcome }]);
-            refetchHistory(); // Instantly shows in sidebar
+            if (newTicketChannel === 'voice') {
+                setMessages([{ id: Date.now(), role: 'agent', content: "🎤 Voice mode active. Click the microphone to send your request." }]);
+            } else {
+                setMessages([{ id: Date.now(), role: 'agent', content: "Hello! 👋 I'm your support assistant. Let's get started on a new issue. What can I help you with?" }]);
+            }
+            refetchHistory();
         } catch {
             alert('Failed to create ticket instantly.');
         }
@@ -131,14 +142,12 @@ export default function UserChatPage() {
         if (!input.trim() || loading || isResolved) return;
         const text = input.trim();
         setInput('');
-        const userMsg: ChatMsg = { id: Date.now(), role: 'user', content: text };
+        const userMsg: ChatMsg = { id: 'local_' + Date.now(), role: 'user', content: text };
         setMessages((m) => [...m, userMsg]);
         setLoading(true);
         setAgentStatus("Thinking...");
         try {
             const ticketId = (activeTicket?.id as string) || '';
-            // Pass session_id inside message or adjust backend to infer.
-            // For now activeTicket dictates context.
             const res = await sendMessage(text, activeTicket?.channel as string || 'chat', ticketId, sessionId);
 
             if (res.ticket) {
@@ -147,28 +156,68 @@ export default function UserChatPage() {
                 refetchHistory();
             }
 
-            const agentMsg: ChatMsg = {
-                id: res.message_id || Date.now() + 1,
-                role: 'agent',
-                content: res.reply,
-                ticket: !activeTicket && res.ticket ? res.ticket : null
-            };
-            setMessages((m) => {
-                if (res.message_id && m.some(x => x.id === res.message_id)) {
-                    return m.map(x => x.id === res.message_id ? { ...agentMsg, ticket: agentMsg.ticket || x.ticket } : x);
-                }
-                return [...m, agentMsg];
-            });
+            // The server now broadcasts both user and agent messages via WS.
+            // The HTTP response also returns the reply. We need to add the agent msg
+            // only if WS hasn't already added it (dedup by message_id).
+            if (res.reply && res.message_id) {
+                const msgId = res.message_id;
+                setMessages((m) => {
+                    if (m.some(x => x.id === msgId)) return m; // WS already added it
+                    return [...m, {
+                        id: msgId,
+                        role: 'agent' as const,
+                        content: res.reply,
+                        ticket: !activeTicket && res.ticket ? res.ticket : null
+                    }];
+                });
+            }
 
-            // If action is resolve OR user said thanks/worked, show the prompt
+            // Show resolve prompt if appropriate
             const lowerMsg = text.toLowerCase();
-            const isThanks = ["thank", "tanks", "worked", "fixed", "done"].some(k => lowerMsg.includes(k));
+            const isThanks = ["thank", "tanks", "worked", "fixed", "done", "solved"].some(k => lowerMsg.includes(k));
             if ((res as any).action === 'resolve' || (isThanks && !isResolved)) {
                 setShowResolvedPrompt(true);
             }
 
         } catch {
             setMessages((m) => [...m, { id: Date.now() + 1, role: 'system', content: '❌ Failed to get response. Please try again.' }]);
+        }
+        setLoading(false);
+        setAgentStatus(null);
+    };
+
+    const handleVoiceSend = async (blob: Blob) => {
+        if (loading || isResolved) return;
+        
+        // Optimistic: show user's voice message immediately with local blob URL
+        const localAudioUrl = URL.createObjectURL(blob);
+        const optimisticId = 'voice_' + Date.now();
+        setMessages((m) => [...m, {
+            id: optimisticId,
+            role: 'user' as const,
+            content: '',
+            audio_url: localAudioUrl,
+        }]);
+        
+        setLoading(true);
+        setAgentStatus("Listening & Thinking...");
+        
+        try {
+            const ticketId = (activeTicket?.id as string) || '';
+            const res = await transcribeVoice(blob, ticketId, sessionId);
+            
+            if (res.ticket) {
+                setActiveTicket(res.ticket);
+                if (res.ticket.status === 'resolved') setIsResolved(true);
+                refetchHistory();
+            }
+            
+            // WS handles adding agent reply. Resolution prompt detection:
+            if (!isResolved && (res as any).action === 'resolve') {
+                setShowResolvedPrompt(true);
+            }
+        } catch {
+            setMessages((m) => [...m, { id: Date.now() + 1, role: 'system', content: '❌ Failed to process voice. Please try again.' }]);
         }
         setLoading(false);
         setAgentStatus(null);
@@ -199,6 +248,8 @@ export default function UserChatPage() {
             console.error(e);
         }
     };
+
+    const isVoiceChannel = activeTicket?.channel === 'voice';
 
     return (
         <div style={{
@@ -237,7 +288,10 @@ export default function UserChatPage() {
                             }}>
                             <div className="flex justify-between items-center mb-1">
                                 <span style={{ fontWeight: 700, fontSize: '0.75rem', color: activeTicket?.id === t.id ? 'var(--accent)' : 'var(--text-secondary)' }}>{t.id}</span>
-                                <span className={`badge ${t.status === 'resolved' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.6rem' }}>{t.status}</span>
+                                <div className="flex items-center gap-2">
+                                    {t.channel === 'voice' && <span title="Voice ticket" style={{ fontSize: '0.7rem' }}>🎤</span>}
+                                    <span className={`badge ${t.status === 'resolved' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.6rem' }}>{t.status}</span>
+                                </div>
                             </div>
                             <div className="text-sm font-medium truncate" style={{ color: activeTicket?.id === t.id ? 'var(--text)' : 'var(--text-secondary)' }}>{t.title || 'Support Request'}</div>
                             <div className="text-xs text-muted mt-2">{formatDate(t.created_at)}</div>
@@ -267,34 +321,48 @@ export default function UserChatPage() {
                                 color: 'var(--text-secondary)'
                             }}>
                                 Active Ticket: <strong>{activeTicket.id as string}</strong>
+                                {isVoiceChannel && <span style={{ marginLeft: 8 }}>🎤 Voice</span>}
                             </span>
                         </div>
                     )}
 
                     <div className="flex flex-col gap-6">
-                        {messages.map((msg) => (
+                        {messages.filter(msg => {
+                            // In voice mode, only show messages that have audio
+                            if (isVoiceChannel) return !!msg.audio_url;
+                            return !!msg.content || !!msg.audio_url;
+                        }).map((msg) => (
                             <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                                 <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : msg.role === 'admin' ? 'chat-bubble-admin' : 'chat-bubble-agent'}`}>
                                     {msg.role === 'admin' && <div style={{ fontWeight: 700, fontSize: '0.7rem', color: 'var(--warning)', marginBottom: 4, textTransform: 'uppercase' }}>🛡️ Administration</div>}
-                                    {/* Voice mode: show only voice bubble, no text */}
-                                    {activeTicket?.channel === 'voice' && msg.audio_url ? (
-                                        <VoiceMessage audioUrl={msg.audio_url} isUser={msg.role === 'user'} />
+                                    
+                                    {/* Voice channel: audio only for ALL roles */}
+                                    {isVoiceChannel ? (
+                                        msg.audio_url && (
+                                            <VoiceMessage audioUrl={msg.audio_url} isUser={msg.role === 'user'} />
+                                        )
                                     ) : (
                                         <>
-                                            <div className="markdown-content">
-                                                {msg.role === 'agent' ? (
-                                                    <ReactMarkdown>{msg.content}</ReactMarkdown>
-                                                ) : (
-                                                    msg.content
-                                                )}
-                                            </div>
+                                            {/* Text content */}
+                                            {msg.content && (
+                                                <div className="markdown-content">
+                                                    {msg.role === 'agent' ? (
+                                                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                                    ) : (
+                                                        msg.content
+                                                    )}
+                                                </div>
+                                            )}
+                                            
+                                            {/* Audio player */}
                                             {msg.audio_url && (
-                                                <div style={{ marginTop: 8 }}>
+                                                <div style={{ marginTop: msg.content ? 8 : 0 }}>
                                                     <VoiceMessage audioUrl={msg.audio_url} isUser={msg.role === 'user'} />
                                                 </div>
                                             )}
                                         </>
                                     )}
+
                                     {msg.ticket && (
                                         <div style={{
                                             marginTop: 12, padding: '12px', borderRadius: 'var(--radius-sm)',
@@ -402,32 +470,13 @@ export default function UserChatPage() {
                 {/* Input Area */}
                 <div style={{ borderTop: '1px solid var(--border)', padding: '20px 24px', background: 'var(--bg-card)' }}>
                     <div className="flex gap-4 items-center">
-                        {activeTicket?.channel === 'voice' ? (
+                        {isVoiceChannel ? (
                             <div className="flex items-center gap-4 w-full">
                                 <div style={{ flex: 1, padding: 10, color: '#888', fontStyle: 'italic' }}>
-                                    Voice mode active. Record your request:
+                                    🎤 Voice mode — Record your message:
                                 </div>
                                 <AudioRecorder
-                                    onSend={async (blob) => {
-                                        setLoading(true);
-                                        try {
-                                            const ticketId = (activeTicket?.id as string) || '';
-                                            const res = await transcribeVoice(blob, ticketId, sessionId);
-                                            if (res.ticket) {
-                                                setActiveTicket(res.ticket);
-                                                if (res.ticket.status === 'resolved') setIsResolved(true);
-                                                refetchHistory();
-                                            }
-                                            setMessages(m => [...m, { id: Date.now(), role: 'user', content: `🎤 ${res.transcript}`, audio_url: res.audio_url }]);
-                                            setMessages(m => [...m, { id: res.message_id || Date.now() + 1, role: 'agent', content: res.reply, audio_url: res.agent_audio_url }]);
-                                            // Show resolution prompt if backend detected success
-                                            if (!isResolved && (res as any).action === 'resolve') {
-                                                setShowResolvedPrompt(true);
-                                            }
-                                        } finally {
-                                            setLoading(false);
-                                        }
-                                    }}
+                                    onSend={handleVoiceSend}
                                     disabled={loading || isResolved}
                                 />
                             </div>
@@ -439,7 +488,7 @@ export default function UserChatPage() {
                                         value={input}
                                         onChange={(e) => setInput(e.target.value)}
                                         onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
-                                        placeholder={isResolved ? "Ticket has been resolved." : activeTicket?.channel === 'email' ? "Type your email reply here..." : "Describe your problem..."}
+                                        placeholder={isResolved ? "Ticket has been resolved." : "Describe your problem..."}
                                         disabled={loading || isResolved}
                                         style={{ borderRadius: '24px', padding: '12px 24px', background: 'var(--bg-input)' }}
                                     />

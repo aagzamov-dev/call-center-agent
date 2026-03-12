@@ -71,6 +71,7 @@ async def chat(body: ChatRequest, db: AsyncSession = Depends(get_session)):
             priority=ticket_action.get("priority", "P3"),
             summary=ticket_action.get("summary", ""),
             created_by=body.session_id,
+            channel=body.channel,
         )
         ticket_id = ticket["id"]
         action_type = "create" # Ensure we know a ticket was just made
@@ -86,13 +87,16 @@ async def chat(body: ChatRequest, db: AsyncSession = Depends(get_session)):
             ticket["title"] = new_title
 
     if ticket_id:
-        # Save user message
-        await svc.add_message(db, ticket_id=ticket_id, role="user", content=body.message, channel=body.channel)
+        # Save user message and broadcast via WS
+        user_msg = await svc.add_message(db, ticket_id=ticket_id, role="user", content=body.message, channel=body.channel)
+        await manager.broadcast_to_ticket(ticket_id, {
+            "type": "new_message",
+            "message": user_msg
+        })
         
         if reply:
-            # Save agent reply
+            # Save agent reply and broadcast via WS
             agent_msg = await svc.add_message(db, ticket_id=ticket_id, role="agent", content=reply, channel=body.channel)
-            # Broadcast the new agent reply to WS
             await manager.broadcast_to_ticket(ticket_id, {
                 "type": "new_message",
                 "message": agent_msg

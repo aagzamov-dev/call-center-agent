@@ -32,9 +32,8 @@ async def create_ticket_endpoint(
     db: AsyncSession = Depends(get_session)
 ):
     ticket = await svc.create_ticket(
-        db, title=title, team=team, priority=priority, created_by=created_by, summary=f"Channel: {channel}"
+        db, title=title, team=team, priority=priority, created_by=created_by, channel=channel,
     )
-    # If the model has a channel field, we can update it; otherwise store in summary
     return ticket
 
 

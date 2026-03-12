@@ -19,6 +19,7 @@ class Ticket(Base):
     created_by = Column(String, default="user")
     assigned_to = Column(String, default="")
     summary = Column(Text, default="")
+    channel = Column(String, default="chat")  # chat, voice, email
     created_at = Column(DateTime)
     updated_at = Column(DateTime)
     feedback_score = Column(Integer, nullable=True)     # e.g. 1 to 5
