@@ -37,7 +37,19 @@ async def create_ticket(
     db.add(t)
     await db.commit()
     await db.refresh(t)
-    return _ticket_to_dict(t)
+    
+    d = _ticket_to_dict(t)
+    from app.core.websockets import manager
+    try:
+        await manager.broadcast_to_ticket("admin_tickets", {
+            "type": "ticket_update",
+            "is_new": True,
+            "ticket": d
+        })
+    except Exception:
+        pass
+        
+    return d
 
 
 async def get_ticket(db: AsyncSession, ticket_id: str) -> dict | None:
@@ -85,7 +97,21 @@ async def update_ticket(db: AsyncSession, ticket_id: str, **kwargs: Any) -> dict
     await db.execute(update(Ticket).where(Ticket.id == ticket_id).values(**kwargs))
     await db.commit()
     t = await db.get(Ticket, ticket_id)
-    return _ticket_to_dict(t) if t else None
+    if not t:
+        return None
+        
+    d = _ticket_to_dict(t)
+    from app.core.websockets import manager
+    try:
+        await manager.broadcast_to_ticket("admin_tickets", {
+            "type": "ticket_update",
+            "is_new": False,
+            "ticket": d
+        })
+    except Exception:
+        pass
+        
+    return d
 
 
 def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
@@ -133,8 +159,27 @@ async def add_message(
         created_at=_now(),
     )
     db.add(m)
+    
+    # Update ticket's updated_at timestamp so it bubbles up or shows as active
+    t = await db.get(Ticket, ticket_id)
+    if t:
+        t.updated_at = _now()
+        
     await db.commit()
     await db.refresh(m)
+    
+    # Broadcast to admin if user or agent replies
+    from app.core.websockets import manager
+    if t and role in ("user", "agent"):
+        try:
+            await manager.broadcast_to_ticket("admin_tickets", {
+                "type": "ticket_update",
+                "is_new": True,  # Treat new messages as unread/new state
+                "ticket": _ticket_to_dict(t)
+            })
+        except Exception:
+            pass
+
     return _msg_to_dict(m)
 
 

@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from app.agent.prompts import (
     TRIAGE_PROMPT,
-    EVALUATOR_PROMPT,
     DRAFTING_PROMPT,
     CLASSIFICATION_PROMPT,
     format_history,
@@ -81,10 +80,6 @@ class TriageOutput(BaseModel):
         description="Extracted constraints as list of key-value pairs (e.g. key='os', value='windows')"
     )
 
-class EvalOutput(BaseModel):
-    model_config = {"extra": "forbid"}
-    reasoning: str = Field(description="Why this score was given")
-    context_confidence: float = Field(ge=0.0, le=1.0, description="0.0 to 1.0 confidence")
 
 class ActionEnum(str, Enum):
     create = "create"
@@ -210,34 +205,6 @@ async def tool_execution(state: AgentState) -> dict:
         }]
     }
 
-
-# ── Node 4: Context Evaluation ───────────────────────────────────────
-
-async def evaluate_context(state: AgentState) -> dict:
-    """Evaluates if the retrieved context is sufficient."""
-    start_time = time.time()
-    await _notify_ws(state, "Evaluating retrieved context...", "AGENT_ANALYZING")
-    llm = _get_fast_llm().with_structured_output(EvalOutput)
-    
-    user_msg = state["user_message"]
-    context_str = build_context_str(state.get("kb_results", []), state.get("tool_results", []))
-    
-    prompt = EVALUATOR_PROMPT.format(user_message=user_msg, context=context_str)
-    
-    result: EvalOutput = await llm.ainvoke([HumanMessage(content=prompt)])
-    
-    agent_steps = list(state.get("agent_steps", []))
-    agent_steps.append({
-        "step_type": "evaluation",
-        "tool_name": "llm_evaluator",
-        "input": {"query": user_msg},
-        "output": {**result.model_dump(), "duration_ms": int((time.time() - start_time) * 1000)}
-    })
-    
-    return {
-        "context_confidence": result.context_confidence,
-        "agent_steps": agent_steps
-    }
 
 
 # ── Node 5: Draft Resolution ─────────────────────────────────────────
@@ -397,12 +364,11 @@ async def handle_resolution(state: AgentState) -> dict:
     """Responds to user confirmation and sets resolution action."""
     await _notify_ws(state, "Closing ticket...", "AGENT_TYPING")
     
-    # Check if we should be extra friendly
     user_msg = state["user_message"].lower()
     if any(x in user_msg for x in ["thank", "tanks", "appreciate", "worked", "fixed"]):
-        reply = "You're very welcome! I'm absolutely glad to help. I'll go ahead and mark this as resolved for you. If anything else comes up, don't hesitate to reach out!"
+        reply = "You're very welcome! I'm glad we could help. I'll mark this as resolved. If anything else comes up, don't hesitate to reach out!"
     else:
-        reply = "I'm glad your issue is resolved! I'll go ahead and close this ticket now. Feel free to start a new chat if you need further assistance."
+        reply = "I'm glad your issue is resolved! I'll close this ticket now. Feel free to start a new chat if you need further assistance."
     
     agent_steps = list(state.get("agent_steps", []))
     agent_steps.append({
@@ -414,5 +380,7 @@ async def handle_resolution(state: AgentState) -> dict:
     
     return {
         "reply": reply,
+        "ticket_action": {"action": "resolve", "team": "", "priority": "", "title": "", "summary": ""},
         "agent_steps": agent_steps
     }
+

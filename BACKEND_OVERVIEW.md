@@ -95,7 +95,10 @@ api/
 |----------|---------|-------------|
 | OPENAI_API_KEY | — | Required |
 | DATABASE_URL | sqlite+aiosqlite:///./storage/agent.db | SQLite path |
-| LLM_MODEL | gpt-4o | Main reasoning model |
+| LLM_MODEL | gpt-4.1-mini | Main drafting model |
+| LLM_FAST_MODEL | gpt-4.1-nano | Fast triage/eval/classification |
+| LLM_TEMPERATURE | 0.1 | Creativity level |
+| EVAL_THRESHOLD | 0.4 | Min context confidence before escalating |
 | STT_MODEL | whisper-1 | Speech-to-text |
 | EMBEDDING_MODEL | text-embedding-3-small | RAG embeddings |
-| LLM_TEMPERATURE | 0.2 | Creativity level |
+

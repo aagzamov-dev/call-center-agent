@@ -1,6 +1,8 @@
 # AI Support Agent Test Questions
 
-This document contains a set of test questions designed to verify the routing accuracy and response quality of the AI Support Agent across different specialized teams.
+This document contains test scenarios to verify the agent's routing, response quality, auto-close, reopen, general hints, and speed across all teams.
+
+---
 
 ## 🖥 Help Desk
 *Focus: General IT support, software troubleshooting, hardware issues.*
@@ -46,3 +48,65 @@ This document contains a set of test questions designed to verify the routing ac
 3. "I noticed an unrecognized login to my account from a location I've never been to. Please investigate."
 4. "I need to grant temporary read-only access to our database for a 3rd party auditor. What's the protocol?"
 5. "I suspect one of our public-facing servers has been compromised. What are the immediate isolation steps?"
+
+---
+
+## 🤖 Auto-Close (Resolve) Tests
+*Focus: Agent should detect thank-you / confirmation and auto-resolve the ticket.*
+
+1. First create a ticket: "My VPN is broken" → then reply: **"Thanks, it works now!"**
+   - ✅ Expected: Ticket status → `resolved`, agent says goodbye
+2. "Thank you so much for the help!" (while in an active ticket)
+   - ✅ Expected: Ticket status → `resolved`
+3. "OK done, everything is fixed" (while in an active ticket)
+   - ✅ Expected: Ticket status → `resolved`
+4. "Did you fix it?" (while in an active ticket — this is a QUESTION, not thanks)
+   - ❌ Expected: Ticket stays `open`, agent should NOT resolve
+5. "Is it working now?" (while in an active ticket — this is a QUESTION)
+   - ❌ Expected: Ticket stays `open`
+
+## 🔄 Ticket Reopen Tests
+*Focus: Users can reopen if agent wrongly closed the ticket.*
+
+1. After a ticket is resolved → click **"Reopen Ticket"** button
+   - ✅ Expected: Ticket status → `open`, system message "Ticket reopened by user", input re-enabled
+2. After giving feedback (1-5 stars) → click **"Reopen Ticket"** button
+   - ✅ Expected: Ticket reopens even after feedback was given
+3. Send a new message after reopening
+   - ✅ Expected: Agent processes the new message normally, admin sees it
+
+## 💡 General Hints vs Company-Specific Tests
+*Focus: AI should give simple hints for general IT issues but refuse to hallucinate company data.*
+
+1. "How do I speed up my slow PC?" (general IT — NOT company-specific)
+   - ✅ Expected: Give 2-3 simple tips (clear cache, restart, disable startup apps, etc.) + "If not helped, Admin will follow up"
+2. "How do I clear browser cache?" (general IT)
+   - ✅ Expected: Give clear step-by-step instructions
+3. "What is our company refund policy?" (company-specific — NOT in KB)
+   - ✅ Expected: "I don't have that information. Admin will follow up shortly."
+4. "How do I access the internal HR portal?" (company-specific — NOT in KB)
+   - ✅ Expected: Should NOT hallucinate a URL. Say admin will help.
+
+## 🗣️ Chitchat Tests
+*Focus: Greetings should NOT create tickets.*
+
+1. "Hello"
+   - ✅ Expected: Polite greeting, asks how to help, no ticket created
+2. "Hi, how are you?"
+   - ✅ Expected: Same — no ticket
+
+## 🚨 Escalation Tests
+*Focus: Frustrated users should be escalated to human.*
+
+1. "I'm SO ANGRY, this is the 5th time I'm reporting this! I want to speak to a manager NOW!"
+   - ✅ Expected: Escalation flag, empathetic response
+2. "OUR ENTIRE SERVER IS DOWN! CRITICAL PRODUCTION OUTAGE!"
+   - ✅ Expected: P1 priority, immediate escalation
+
+## ⚡ Speed Tests
+*Focus: Verify faster responses with gpt-4.1-nano / gpt-4.1-mini.*
+
+1. Average response time for a simple query ("My password expired")
+   - ✅ Target: < 3 seconds total
+2. Average response time for a complex query with KB search
+   - ✅ Target: < 5 seconds total

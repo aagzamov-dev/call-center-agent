@@ -6,7 +6,6 @@ from app.agent.nodes import (
     triage,
     retrieval,
     tool_execution,
-    evaluate_context,
     draft_resolution,
     ticket_action,
     escalate,
@@ -15,8 +14,9 @@ from app.agent.nodes import (
     handle_resolution
 )
 from app.agent.state import AgentState
+from app.core.config import settings
 
-EVAL_THRESHOLD = 0.4 # Default threshold for context confidence
+EVAL_THRESHOLD = settings.EVAL_THRESHOLD
 
 _graph = StateGraph(AgentState)
 
@@ -24,7 +24,6 @@ _graph = StateGraph(AgentState)
 _graph.add_node("triage", triage)
 _graph.add_node("retrieval", retrieval)
 _graph.add_node("tool_execution", tool_execution)
-_graph.add_node("evaluate_context", evaluate_context)
 _graph.add_node("draft_resolution", draft_resolution)
 _graph.add_node("ticket_action", ticket_action)
 _graph.add_node("escalate", escalate)
@@ -53,19 +52,9 @@ def triage_router(state: AgentState) -> str:
 
 _graph.add_conditional_edges("triage", triage_router)
 
-# Data gathering merges into evaluation
-_graph.add_edge("retrieval", "evaluate_context")
-_graph.add_edge("tool_execution", "evaluate_context")
-
-# Evaluation Router
-def eval_router(state: AgentState) -> str:
-    conf = state.get("context_confidence", 0.0)
-    if conf < EVAL_THRESHOLD:
-        # If we can't answer it, escalate
-        return "escalate"
-    return "draft_resolution"
-
-_graph.add_conditional_edges("evaluate_context", eval_router)
+# Data gathering merges into drafting smoothly!
+_graph.add_edge("retrieval", "draft_resolution")
+_graph.add_edge("tool_execution", "draft_resolution")
 
 # Drafting -> Action
 _graph.add_edge("draft_resolution", "ticket_action")
@@ -76,8 +65,8 @@ _graph.add_edge("quick_respond", END)
 _graph.add_edge("observe", END)
 
 # These nodes now flow into ticket_action for professional routing
-_graph.add_edge("escalate", "ticket_action")
-_graph.add_edge("handle_resolution", "ticket_action")
+# handle_resolution already sets ticket_action={"action":"resolve"} — skip LLM classification
+_graph.add_edge("handle_resolution", END)
 
 agent_graph = _graph.compile()
 

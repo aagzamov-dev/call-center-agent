@@ -17,6 +17,12 @@ export default function AdminPage() {
     const [teamFilter, setTeamFilter] = useState('all');
     const [statusFilter, setStatusFilter] = useState('all');
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [newTickets, setNewTickets] = useState<Set<string>>(new Set());
+    
+    const selectedIdRef = useRef(selectedId);
+    useEffect(() => {
+        selectedIdRef.current = selectedId;
+    }, [selectedId]);
 
     // Local messages state — synced from detail query + WS
     const [localMessages, setLocalMessages] = useState<any[]>([]);
@@ -39,6 +45,35 @@ export default function AdminPage() {
             setLocalMessages(detail.messages);
         }
     }, [detail]);
+
+    // Global WebSocket for ticket list updates
+    useEffect(() => {
+        const ws = new WebSocket(`ws://localhost:8000/api/ws/chat/admin_tickets`);
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'ticket_update') {
+                    // Refresh ticket list
+                    qc.invalidateQueries({ queryKey: ['tickets'] });
+                    
+                    // Show NEW badge if it's a new ticket or reopened, and not currently viewing it
+                    if (data.is_new || data.ticket.status === 'open') {
+                        setNewTickets(prev => {
+                            if (data.ticket.id === selectedIdRef.current) return prev;
+                            const next = new Set(prev);
+                            next.add(data.ticket.id);
+                            return next;
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error('Admin global WS parse error', e);
+            }
+        };
+
+        return () => ws.close();
+    }, [qc]);
 
     // WebSocket connection for real-time chat updates on selected ticket
     useEffect(() => {
@@ -143,9 +178,19 @@ export default function AdminPage() {
                                         borderColor: selectedId === t.id ? 'var(--accent)' : 'var(--border)',
                                         boxShadow: selectedId === t.id ? 'var(--shadow-glow)' : 'none'
                                     }}
-                                    onClick={() => setSelectedId(t.id as string)}>
+                                    onClick={() => {
+                                        setSelectedId(t.id as string);
+                                        setNewTickets(prev => {
+                                            const next = new Set(prev);
+                                            next.delete(t.id as string);
+                                            return next;
+                                        });
+                                    }}>
                                     <div className="flex items-center justify-between mb-2">
-                                        <span style={{ fontWeight: 800, fontSize: '0.7rem', color: PRIORITY_COLORS[t.priority as string], border: `1px solid ${PRIORITY_COLORS[t.priority as string]}`, padding: '1px 6px', borderRadius: 4 }}>{t.priority as string}</span>
+                                        <div className="flex items-center gap-2">
+                                            <span style={{ fontWeight: 800, fontSize: '0.7rem', color: PRIORITY_COLORS[t.priority as string], border: `1px solid ${PRIORITY_COLORS[t.priority as string]}`, padding: '1px 6px', borderRadius: 4 }}>{t.priority as string}</span>
+                                            {newTickets.has(t.id as string) && <span style={{ background: 'var(--danger, #ef4444)', color: 'white', fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: 8, animation: 'pulse 2s infinite' }}>NEW</span>}
+                                        </div>
                                         <div className="flex items-center gap-2">
                                             {t.channel === 'voice' && <span title="Voice" style={{ fontSize: '0.7rem' }}>🎤</span>}
                                             <span className="font-mono text-xs text-muted">{(t.id as string).substring(0, 10)}</span>

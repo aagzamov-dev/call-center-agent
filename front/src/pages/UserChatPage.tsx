@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { sendMessage, transcribeVoice, sendFeedback } from '../api/chat';
-import { getTicket, listUserTickets, createTicket, updateTicket } from '../api/tickets';
+import { getTicket, listUserTickets, createTicket, updateTicket, reopenTicket } from '../api/tickets';
 import { formatDate } from '../lib/utils';
 import AudioRecorder from '../components/AudioRecorder';
 import VoiceMessage from '../components/VoiceMessage';
 import ReactMarkdown from 'react-markdown';
-import { MessageSquare, Mic, CheckCircle, XCircle } from 'lucide-react';
+import { MessageSquare, Mic, CheckCircle, XCircle, RotateCcw } from 'lucide-react';
 
 interface ChatMsg {
     id: string | number;
@@ -79,7 +79,9 @@ export default function UserChatPage() {
                     // Auto-clear loading if agent replied
                     if (m.role === 'agent') setLoading(false);
                 } else if (data.type === "ticket_update") {
-                    if (data.ticket.status === 'resolved') setIsResolved(true);
+                    const newStatus = data.ticket?.status;
+                    if (newStatus === 'resolved') setIsResolved(true);
+                    else if (newStatus === 'open') { setIsResolved(false); setFeedbackGiven(false); }
                     refetchHistory();
                 } else if (data.type === "agent_status") {
                     setAgentStatus(data.status);
@@ -188,7 +190,7 @@ export default function UserChatPage() {
 
     const handleVoiceSend = async (blob: Blob) => {
         if (loading || isResolved) return;
-        
+
         // Optimistic: show user's voice message immediately with local blob URL
         const localAudioUrl = URL.createObjectURL(blob);
         const optimisticId = 'voice_' + Date.now();
@@ -198,20 +200,20 @@ export default function UserChatPage() {
             content: '',
             audio_url: localAudioUrl,
         }]);
-        
+
         setLoading(true);
         setAgentStatus("Listening & Thinking...");
-        
+
         try {
             const ticketId = (activeTicket?.id as string) || '';
             const res = await transcribeVoice(blob, ticketId, sessionId);
-            
+
             if (res.ticket) {
                 setActiveTicket(res.ticket);
                 if (res.ticket.status === 'resolved') setIsResolved(true);
                 refetchHistory();
             }
-            
+
             // WS handles adding agent reply. Resolution prompt detection:
             if (!isResolved && (res as any).action === 'resolve') {
                 setShowResolvedPrompt(true);
@@ -237,6 +239,19 @@ export default function UserChatPage() {
 
     const handleResolveNo = () => {
         setShowResolvedPrompt(false);
+    };
+
+    const handleReopen = async () => {
+        if (!activeTicket) return;
+        try {
+            await reopenTicket(activeTicket.id as string);
+            setIsResolved(false);
+            setFeedbackGiven(false);
+            setShowResolvedPrompt(false);
+            refetchHistory();
+        } catch (e) {
+            console.error(e);
+        }
     };
 
     const handleFeedback = async (score: number) => {
@@ -335,7 +350,7 @@ export default function UserChatPage() {
                             <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                                 <div className={`chat-bubble ${msg.role === 'user' ? 'chat-bubble-user' : msg.role === 'admin' ? 'chat-bubble-admin' : 'chat-bubble-agent'}`}>
                                     {msg.role === 'admin' && <div style={{ fontWeight: 700, fontSize: '0.7rem', color: 'var(--warning)', marginBottom: 4, textTransform: 'uppercase' }}>🛡️ Administration</div>}
-                                    
+
                                     {/* Voice channel: audio only for ALL roles */}
                                     {isVoiceChannel ? (
                                         msg.audio_url && (
@@ -353,7 +368,7 @@ export default function UserChatPage() {
                                                     )}
                                                 </div>
                                             )}
-                                            
+
                                             {/* Audio player */}
                                             {msg.audio_url && (
                                                 <div style={{ marginTop: msg.content ? 8 : 0 }}>
@@ -442,13 +457,27 @@ export default function UserChatPage() {
                                 <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>🏁</div>
                                 <h2 style={{ margin: '0 0 8px 0', color: 'var(--success)' }}>Issue Resolved</h2>
                                 <p style={{ margin: '0 0 24px 0', color: 'var(--text-secondary)' }}>We hope we could help you today. How was your experience?</p>
-                                <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                                <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 16 }}>
                                     {[1, 2, 3, 4, 5].map(score => (
                                         <button key={score} onClick={() => handleFeedback(score)} className="btn btn-secondary" style={{ width: 50, height: 50, justifyContent: 'center', fontSize: '1.2rem' }}>
                                             {score}
                                         </button>
                                     ))}
                                 </div>
+                                <button
+                                    onClick={handleReopen}
+                                    style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                                        padding: '8px 20px', borderRadius: '20px', border: '1px solid var(--border)',
+                                        background: 'rgba(239, 68, 68, 0.08)', color: '#ef4444',
+                                        cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem',
+                                        transition: 'all 0.2s',
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'}
+                                >
+                                    <RotateCcw size={14} /> Problem not solved? Reopen ticket
+                                </button>
                             </div>
                         </div>
                     )
@@ -456,10 +485,24 @@ export default function UserChatPage() {
 
                     {
                         feedbackGiven && (
-                            <div style={{ display: 'flex', justifyContent: 'center', padding: '32px 0' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '32px 0' }}>
                                 <div style={{ padding: '16px 32px', borderRadius: '30px', background: 'rgba(34, 197, 94, 0.1)', color: 'var(--success)', border: '1px solid var(--success)', fontWeight: 600 }}>
                                     ✅ Thank you for your feedback!
                                 </div>
+                                <button
+                                    onClick={handleReopen}
+                                    style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                                        padding: '8px 20px', borderRadius: '20px', border: '1px solid var(--border)',
+                                        background: 'rgba(239, 68, 68, 0.08)', color: '#ef4444',
+                                        cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem',
+                                        transition: 'all 0.2s',
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'}
+                                >
+                                    <RotateCcw size={14} /> Problem not solved? Reopen ticket
+                                </button>
                             </div>
                         )
                     }

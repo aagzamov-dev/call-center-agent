@@ -27,3 +27,8 @@ export async function createTicket(title: string, channel: string, sessionId: st
   const { data } = await client.post(`/api/tickets/create?title=${encodeURIComponent(title)}&channel=${encodeURIComponent(channel)}&created_by=${encodeURIComponent(sessionId)}&team=${encodeURIComponent(team)}`);
   return data as Record<string, unknown>;
 }
+
+export async function reopenTicket(id: string, reason = '') {
+  const { data } = await client.post(`/api/tickets/${id}/reopen`, { reason });
+  return data;
+}

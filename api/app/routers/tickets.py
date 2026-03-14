@@ -114,3 +114,36 @@ async def feedback_ticket(ticket_id: str, body: TicketFeedback, db: AsyncSession
     if not t:
         raise HTTPException(404, "Ticket not found")
     return t
+
+
+class ReopenRequest(BaseModel):
+    reason: str = ""
+
+
+@router.post("/tickets/{ticket_id}/reopen")
+async def reopen_ticket(ticket_id: str, body: ReopenRequest = None, db: AsyncSession = Depends(get_session)):
+    """Allow user to reopen a resolved/closed ticket if their problem wasn't actually fixed."""
+    t = await svc.get_ticket(db, ticket_id)
+    if not t:
+        raise HTTPException(404, "Ticket not found")
+    if t["status"] not in ("resolved", "closed"):
+        raise HTTPException(400, "Only resolved or closed tickets can be reopened")
+    
+    # Reopen ticket
+    updated = await svc.update_ticket(db, ticket_id, status="open")
+    
+    # Add system message for audit trail
+    reason_text = f"Ticket reopened by user. Reason: {body.reason}" if body and body.reason else "Ticket reopened by user — problem not resolved."
+    msg = await svc.add_message(db, ticket_id=ticket_id, role="system", content=reason_text)
+    
+    # Broadcast so admin sees it immediately
+    await manager.broadcast_to_ticket(ticket_id, {
+        "type": "ticket_update",
+        "ticket": updated
+    })
+    await manager.broadcast_to_ticket(ticket_id, {
+        "type": "new_message",
+        "message": msg
+    })
+    
+    return updated
